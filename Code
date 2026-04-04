@@ -1,0 +1,152 @@
+#include <Servo.h> 
+// --- Broches --- 
+
+const int trigPin1 = 2; 
+
+const int echoPin1 = 3; 
+
+const int trigPin2 = 4; 
+
+const int echoPin2 = 5; 
+
+const int ledPin = 6;  
+
+// --- Servo --- 
+
+const int servoPin = 9; 
+
+Servo pontServo; 
+
+  
+
+// --- Logique pont --- 
+
+const float SEUIL_DISTANCE = 20.0;      // cm 
+
+const int angleFerme = 0;               // pont fermé  
+
+const int angleOuvert = 90;             // pont ouvert 
+
+  
+
+bool pontFerme = true; 
+
+  
+
+void setup() { 
+
+  pinMode(trigPin1, OUTPUT); pinMode(echoPin1, INPUT); 
+
+  pinMode(trigPin2, OUTPUT); pinMode(echoPin2, INPUT); 
+
+  pinMode(ledPin, OUTPUT); 
+
+  pontServo.attach(servoPin); 
+
+  Serial.begin(9600); 
+
+  
+
+  fermerPont(); 
+
+} 
+
+  
+
+void loop() { 
+
+  float distance1 = mesurerDistanceCM(trigPin1, echoPin1); 
+
+  float distance2 = mesurerDistanceCM(trigPin2, echoPin2); 
+
+  
+
+  Serial.print("[C1] "); Serial.print(distance1); 
+
+  Serial.print(" cm [C2] "); Serial.print(distance2); Serial.println(" cm"); 
+
+  
+
+  if (pontFerme && distance1 < SEUIL_DISTANCE) { 
+
+    Serial.println("Arrivée détectée : ouverture du pont !"); 
+
+    ouvrirPont(); 
+
+    digitalWrite(ledPin, HIGH); 
+
+    // attendre que l'utilisateur passe sur le pont (capteur 2) 
+
+    while (mesurerDistanceCM(trigPin2, echoPin2) < SEUIL_DISTANCE) { 
+
+      Serial.println("Présence détectée sur le pont..."); 
+
+      delay(400); 
+
+    } 
+
+    // attend que plus rien sur le pont puis referme 
+
+    Serial.println("Départ détecté. Fermeture du pont."); 
+
+    fermerPont(); 
+
+    digitalWrite(ledPin, LOW); 
+
+  } 
+
+  delay(400); 
+
+} 
+
+  
+
+float mesurerDistanceCM(int trigPin, int echoPin) { 
+
+  long duration; 
+
+  float distCm; 
+
+  digitalWrite(trigPin, LOW); 
+
+  delayMicroseconds(2); 
+
+  digitalWrite(trigPin, HIGH); 
+
+  delayMicroseconds(10); 
+
+  digitalWrite(trigPin, LOW); 
+
+  
+
+  duration = pulseIn(echoPin, HIGH, 25000); 
+
+  if (duration == 0) return 999; // pas de mesure valide (hors d'atteinte) 
+
+  distCm = (duration * 0.034) / 2.0; 
+
+  return distCm; 
+
+} 
+
+  
+
+void ouvrirPont() { 
+
+  pontServo.write(angleOuvert); 
+
+  pontFerme = false; 
+
+} 
+
+  
+
+void fermerPont() { 
+
+  pontServo.write(angleFerme); 
+
+  pontFerme = true; 
+
+} 
+
+ 
