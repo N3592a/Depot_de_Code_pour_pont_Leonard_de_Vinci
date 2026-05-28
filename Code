@@ -1,4 +1,7 @@
 #include <Servo.h> 
+
+  
+
 // --- Broches --- 
 
 const int trigPin1 = 2; 
@@ -9,27 +12,87 @@ const int trigPin2 = 4;
 
 const int echoPin2 = 5; 
 
-const int ledPin = 6;  
-
-// --- Servo --- 
+const int ledPin = 6; 
 
 const int servoPin = 9; 
+
+  
+
+// --- Logique --- 
+
+const float SEUIL_DETECTION = 25.0; 
+
+const float SEUIL_PRESENCE = 15.0; 
+
+const unsigned long TIMEOUT_OUVERTURE = 30000; // 30 secondes 
+
+  
 
 Servo pontServo; 
 
   
 
-// --- Logique pont --- 
+enum EtatPont { FERME, OUVERT_ATTENTE_PASSAGE, EN_PASSAGE, SECURITE }; 
 
-const float SEUIL_DISTANCE = 20.0;      // cm 
-
-const int angleFerme = 0;               // pont fermé  
-
-const int angleOuvert = 90;             // pont ouvert 
+EtatPont etat = FERME; 
 
   
 
-bool pontFerme = true; 
+unsigned long tEtat = 0; // Temps d'entrée dans l'état 
+
+  
+
+// Anti-bruit : moyenne simple sur N mesures 
+
+float mesurerDistanceCM(int trigPin, int echoPin) { 
+
+  const int N = 3; 
+
+  float val = 0; 
+
+  for (int i=0; i<N; i++) { 
+
+    digitalWrite(trigPin, LOW); delayMicroseconds(2); 
+
+    digitalWrite(trigPin, HIGH); delayMicroseconds(10); 
+
+    digitalWrite(trigPin, LOW); 
+
+    long duration = pulseIn(echoPin, HIGH, 25000); 
+
+    float d = duration == 0 ? 999.0 : (duration * 0.034) / 2.0; 
+
+    val += d; 
+
+    delay(20); 
+
+  } 
+
+  return val / N; 
+
+} 
+
+  
+
+// Consignes pont 
+
+void ouvrirPont()   { pontServo.write(90); } 
+
+void fermerPont()   { pontServo.write(0);  } 
+
+  
+
+void alerteSecurite() { 
+
+  Serial.println("!!! ERREUR CAPTEUR — Fermeture d'urgence et LED ON !!!"); 
+
+  fermerPont(); 
+
+  digitalWrite(ledPin, HIGH); 
+
+  etat = SECURITE; 
+
+} 
 
   
 
@@ -39,7 +102,7 @@ void setup() {
 
   pinMode(trigPin2, OUTPUT); pinMode(echoPin2, INPUT); 
 
-  pinMode(ledPin, OUTPUT); 
+  pinMode(ledPin, OUTPUT); digitalWrite(ledPin, LOW); 
 
   pontServo.attach(servoPin); 
 
@@ -49,104 +112,116 @@ void setup() {
 
   fermerPont(); 
 
+  Serial.println("SYSTEME PONT PRÊT"); 
+
 } 
 
   
 
 void loop() { 
 
-  float distance1 = mesurerDistanceCM(trigPin1, echoPin1); 
-
-  float distance2 = mesurerDistanceCM(trigPin2, echoPin2); 
+  if(etat == SECURITE) return; // Attend reboot manuel 
 
   
 
-  Serial.print("[C1] "); Serial.print(distance1); 
+  float d1 = mesurerDistanceCM(trigPin1, echoPin1); 
 
-  Serial.print(" cm [C2] "); Serial.print(distance2); Serial.println(" cm"); 
+  float d2 = mesurerDistanceCM(trigPin2, echoPin2); 
 
   
 
-  if (pontFerme && distance1 < SEUIL_DISTANCE) { 
+  // Détection capteur hors service 
 
-    Serial.println("Arrivée détectée : ouverture du pont !"); 
+  if (d1 == 999 || d2 == 999) { 
 
-    ouvrirPont(); 
+    alerteSecurite(); 
 
-    digitalWrite(ledPin, HIGH); 
-
-    // attendre que l'utilisateur passe sur le pont (capteur 2) 
-
-    while (mesurerDistanceCM(trigPin2, echoPin2) < SEUIL_DISTANCE) { 
-
-      Serial.println("Présence détectée sur le pont..."); 
-
-      delay(400); 
-
-    } 
-
-    // attend que plus rien sur le pont puis referme 
-
-    Serial.println("Départ détecté. Fermeture du pont."); 
-
-    fermerPont(); 
-
-    digitalWrite(ledPin, LOW); 
+    return; 
 
   } 
 
-  delay(400); 
+  
 
-} 
+  // Fin du timeout dans n'importe quel état 
+
+  if (etat != FERME && millis() - tEtat > TIMEOUT_OUVERTURE) { 
+
+    Serial.println("Timeout sans passage détecté — fermeture sécurité."); 
+
+    fermerPont(); digitalWrite(ledPin, LOW); 
+
+    etat = FERME; 
+
+    tEtat = millis(); 
+
+    return; 
+
+  } 
 
   
 
-float mesurerDistanceCM(int trigPin, int echoPin) { 
+  switch(etat) { 
 
-  long duration; 
+    case FERME: 
 
-  float distCm; 
+      if (d1 < SEUIL_DETECTION) { 
 
-  digitalWrite(trigPin, LOW); 
+        Serial.println(">> Arrivée détectée, ouverture du pont."); 
 
-  delayMicroseconds(2); 
+        ouvrirPont(); digitalWrite(ledPin, HIGH); 
 
-  digitalWrite(trigPin, HIGH); 
+        etat = OUVERT_ATTENTE_PASSAGE; 
 
-  delayMicroseconds(10); 
+        tEtat = millis(); 
 
-  digitalWrite(trigPin, LOW); 
+      } 
 
-  
-
-  duration = pulseIn(echoPin, HIGH, 25000); 
-
-  if (duration == 0) return 999; // pas de mesure valide (hors d'atteinte) 
-
-  distCm = (duration * 0.034) / 2.0; 
-
-  return distCm; 
-
-} 
+      break; 
 
   
 
-void ouvrirPont() { 
+    case OUVERT_ATTENTE_PASSAGE: 
 
-  pontServo.write(angleOuvert); 
+      // Passage détecté sur capteur 2 : personne sur le pont 
 
-  pontFerme = false; 
+      if (d2 < SEUIL_PRESENCE) { 
 
-} 
+        Serial.println(">> Passage détecté."); 
+
+        etat = EN_PASSAGE; 
+
+        tEtat = millis(); // reset du timeout 
+
+      } 
+
+      break; 
 
   
 
-void fermerPont() { 
+    case EN_PASSAGE: 
 
-  pontServo.write(angleFerme); 
+      // Départ (plus personne sur le pont) 
 
-  pontFerme = true; 
+      if (d2 > SEUIL_PRESENCE) { 
+
+        Serial.println(">> Départ détecté, fermeture du pont."); 
+
+        fermerPont(); digitalWrite(ledPin, LOW); 
+
+        etat = FERME; 
+
+        tEtat = millis(); 
+
+      } 
+
+      break; 
+
+  
+
+    default: break; 
+
+  } 
+
+  delay(250); 
 
 } 
-
- 
